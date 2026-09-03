@@ -2,7 +2,7 @@ name: Sync Upstream Sub-Store
 
 on:
   schedule:
-    # 每小时第 17 分钟检查一次
+    # 每小时第 12 分钟检查一次
     - cron: '12 * * * *'
   workflow_dispatch:
     inputs:
