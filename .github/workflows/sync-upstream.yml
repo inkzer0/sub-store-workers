@@ -2,8 +2,8 @@ name: Sync Upstream Sub-Store
 
 on:
   schedule:
-    # 每天 UTC 16:00 = 北京 00:00
-    - cron: '0 16 * * *'
+    # 每小时第 17 分钟检查一次
+    - cron: '12 * * * *'
   workflow_dispatch:
     inputs:
       force:
@@ -70,7 +70,36 @@ jobs:
             echo "needed=true" >> $GITHUB_OUTPUT
             echo "Update needed"
           fi
+      - name: Get update changelog
+        id: changelog
+        if: steps.check.outputs.needed == 'true'
+        env:
+          LAST_SHA: ${{ steps.last.outputs.sha }}
+          CURRENT_SHA: ${{ steps.upstream.outputs.sha }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "$LAST_SHA" = "none" ]; then
+            CHANGELOG="首次部署"
+          elif [ "$LAST_SHA" = "$CURRENT_SHA" ]; then
+            CHANGELOG="强制重新部署（上游无新提交）"
+          else
+            CHANGELOG=$(curl -fsSL \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/sub-store-org/Sub-Store/compare/${LAST_SHA}...${CURRENT_SHA}" \
+              | jq -r '.commits[:10][] | "• " + (.commit.message | split("\n")[0] | .[0:200])' || true)
+          fi
 
+          if [ -z "$CHANGELOG" ]; then
+            CHANGELOG="未获取到更新说明"
+          fi
+
+          DELIM="EOF_$(date +%s%N)"
+          {
+            echo "text<<${DELIM}"
+            echo "$CHANGELOG"
+            echo "${DELIM}"
+          } >> "$GITHUB_OUTPUT"
       - name: Setup Node
         if: steps.check.outputs.needed == 'true'
         uses: actions/setup-node@v4
@@ -244,14 +273,21 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CHANGELOG: ${{ steps.changelog.outputs.text }}
         run: |
           if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
             exit 0
           fi
 
+          UPDATE_TIME=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')
+
           TEXT="✅ Sub-Store Workers 更新成功
+
           版本：${{ steps.upstream.outputs.version }}
-          Worker：https://sub-store-workers.${{ secrets.WORKERS_SUBDOMAIN }}.workers.dev"
+          更新时间：${UPDATE_TIME}（北京时间）
+
+          更新内容：
+          ${CHANGELOG}"
 
           curl -sS --fail -X POST \
             "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
